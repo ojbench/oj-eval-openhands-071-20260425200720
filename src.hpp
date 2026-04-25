@@ -20,6 +20,11 @@ struct TaskState {
     time_t start_time;
     bool is_running;
     
+    // Default constructor
+    TaskState() : task_id(0), time_passed(0), cpu_count(0), 
+                 start_time(0), is_running(false) {}
+    
+    // Constructor with task_id
     TaskState(task_id_t id) : task_id(id), time_passed(0), cpu_count(0), 
                              start_time(0), is_running(false) {}
 };
@@ -28,14 +33,21 @@ struct TaskState {
 struct PriorityComparator {
     std::unordered_map<task_id_t, Task> task_map;
     
+    PriorityComparator() = default;
+    
     PriorityComparator(const std::vector<Task>& tasks) {
-        for (const auto& task : tasks) {
-            task_map[task_id_t(&task - &tasks[0])] = task;
+        for (size_t i = 0; i < tasks.size(); ++i) {
+            task_map[task_id_t(i)] = tasks[i];
         }
     }
     
     bool operator()(const task_id_t& a, const task_id_t& b) const {
-        return task_map.at(a).priority < task_map.at(b).priority;
+        auto it_a = task_map.find(a);
+        auto it_b = task_map.find(b);
+        if (it_a == task_map.end() || it_b == task_map.end()) {
+            return false; // Should not happen in normal operation
+        }
+        return it_a->second.priority < it_b->second.priority;
     }
 };
 
@@ -55,8 +67,6 @@ auto generate_tasks(const Description &desc) -> std::vector<Task> {
                                                  time_t(0));
         
         priority_t remaining_priority_max = desc.priority_sum.max - total_priority;
-        priority_t remaining_priority_min = std::max(desc.priority_sum.min - total_priority, 
-                                                   priority_t(0));
         
         // Adjust single task ranges based on remaining totals
         time_t exec_min = desc.execution_time_single.min;
@@ -68,12 +78,12 @@ auto generate_tasks(const Description &desc) -> std::vector<Task> {
         if (prio_min > prio_max) prio_min = prio_max;
         
         // Generate values
-        time_t execution_time = exec_min + (i % (exec_max - exec_min + 1));
+        time_t execution_time = exec_min + (i % (std::max(exec_max - exec_min + 1, time_t(1))));
         if (execution_time > remaining_execution_max) {
             execution_time = remaining_execution_max;
         }
         
-        priority_t priority = prio_min + (i % (prio_max - prio_min + 1));
+        priority_t priority = prio_min + (i % (std::max(prio_max - prio_min + 1, priority_t(1))));
         if (priority > remaining_priority_max) {
             priority = remaining_priority_max;
         }
@@ -89,7 +99,7 @@ auto generate_tasks(const Description &desc) -> std::vector<Task> {
         }
         
         // Generate launch time and deadline
-        time_t deadline = desc.deadline_time.min + (i % (desc.deadline_time.max - desc.deadline_time.min + 1));
+        time_t deadline = desc.deadline_time.min + (i % (std::max(desc.deadline_time.max - desc.deadline_time.min + 1, time_t(1))));
         time_t launch_time = std::max(time_t(0), deadline - 100); // Ensure launch time is before deadline
         
         tasks.push_back({
@@ -111,14 +121,22 @@ auto generate_tasks(const Description &desc) -> std::vector<Task> {
 
 auto schedule_tasks(time_t time, std::vector<Task> list, const Description &desc) -> std::vector<Policy> {
     static std::unordered_map<task_id_t, TaskState> task_states;
-    static std::priority_queue<task_id_t, std::vector<task_id_t>, PriorityComparator> pending_tasks(
-        PriorityComparator(std::vector<Task>()));
+    static std::priority_queue<task_id_t, std::vector<task_id_t>, PriorityComparator> pending_tasks;
+    static PriorityComparator comparator;
+    
+    // Update the comparator with current tasks if it's empty
+    if (comparator.task_map.empty() && !list.empty()) {
+        comparator = PriorityComparator(list);
+    }
     
     // Update pending tasks with new arrivals
-    for (const auto& task : list) {
-        task_id_t task_id = task_id_t(&task - &list[0]);
-        pending_tasks.push(task_id);
-        task_states[task_id] = TaskState(task_id);
+    for (size_t i = 0; i < list.size(); ++i) {
+        task_id_t task_id = task_id_t(i);
+        // Only add if not already in task_states
+        if (task_states.find(task_id) == task_states.end()) {
+            task_states[task_id] = TaskState(task_id);
+            pending_tasks.push(task_id);
+        }
     }
     
     std::vector<Policy> policies;
@@ -127,6 +145,9 @@ auto schedule_tasks(time_t time, std::vector<Task> list, const Description &desc
     // Check if any running tasks should be canceled or saved
     for (auto& [task_id, state] : task_states) {
         if (!state.is_running) continue;
+        
+        // Make sure task_id is valid
+        if (task_id >= list.size()) continue;
         
         const Task& task = list[task_id];
         time_t time_used = time - state.start_time;
@@ -154,8 +175,14 @@ auto schedule_tasks(time_t time, std::vector<Task> list, const Description &desc
         task_id_t task_id = pending_tasks.top();
         pending_tasks.pop();
         
+        // Make sure task_id is valid
+        if (task_id >= list.size()) continue;
+        
         const Task& task = list[task_id];
-        TaskState& state = task_states[task_id];
+        auto it = task_states.find(task_id);
+        if (it == task_states.end()) continue;
+        
+        TaskState& state = it->second;
         
         if (state.is_running) continue; // Already running
         
