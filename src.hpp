@@ -63,8 +63,6 @@ auto generate_tasks(const Description &desc) -> std::vector<Task> {
     for (task_id_t i = 0; i < desc.task_count; ++i) {
         // Calculate remaining ranges
         time_t remaining_execution_max = desc.execution_time_sum.max - total_execution_time;
-        time_t remaining_execution_min = std::max(desc.execution_time_sum.min - total_execution_time, 
-                                                 time_t(0));
         
         priority_t remaining_priority_max = desc.priority_sum.max - total_priority;
         
